@@ -6,6 +6,16 @@ import os
 import tkinter as tk
 from tkinter import simpledialog
 from datetime import datetime
+try:
+    # Windows-only imports for window capture
+    import win32gui
+    import win32ui
+    import win32con
+    import win32api
+    from PIL import Image
+    WIN32_AVAILABLE = True
+except Exception:
+    WIN32_AVAILABLE = False
 
 # --- 1. Configuration (Change to your coordinates) ---
 # Regions are (X start, Y start, Width, Height)
@@ -26,6 +36,77 @@ def take_screenshot(region, filename):
     im = pyautogui.screenshot(region=region)
     im.save(filename)
     print(f"Screenshot {filename} saved.")
+
+
+def find_edge_window():
+    """Return the HWND of a Microsoft Edge window (first match) or None."""
+    if not WIN32_AVAILABLE:
+        return None
+
+    def _enum(hwnd, results):
+        if not win32gui.IsWindowVisible(hwnd):
+            return
+        title = win32gui.GetWindowText(hwnd) or ""
+        cls = win32gui.GetClassName(hwnd) or ""
+        # Match common Edge window title/class (Edge is Chromium-based)
+        if 'edge' in title.lower() or 'microsoft edge' in title.lower() or 'msedge' in title.lower():
+            results.append(hwnd)
+        elif 'chrome' in cls.lower() or 'chrome_widget_win' in cls.lower():
+            # Edge uses Chromium class names in some versions; also check title for Edge
+            if 'edge' in title.lower() or 'microsoft edge' in title.lower():
+                results.append(hwnd)
+
+    matches = []
+    win32gui.EnumWindows(_enum, matches)
+    return matches[0] if matches else None
+
+
+def capture_window_only(hwnd, filename):
+    """Capture the given window's image (hwnd) to filename using PrintWindow.
+    Falls back to region screenshot if PrintWindow fails or win32 not available.
+    """
+    if not WIN32_AVAILABLE or hwnd is None:
+        return False
+
+    try:
+        # Get window rectangle (including borders)
+        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+        width = right - left
+        height = bottom - top
+
+        # Create device context
+        hwndDC = win32gui.GetWindowDC(hwnd)
+        mfcDC = win32ui.CreateDCFromHandle(hwndDC)
+        saveDC = mfcDC.CreateCompatibleDC()
+
+        # Create bitmap to save
+        saveBitMap = win32ui.CreateBitmap()
+        saveBitMap.CreateCompatibleBitmap(mfcDC, width, height)
+        saveDC.SelectObject(saveBitMap)
+
+        # Try PrintWindow (1 to include layered windows)
+        result = win32gui.PrintWindow(hwnd, saveDC.GetSafeHdc(), 1)
+
+        bmpinfo = saveBitMap.GetInfo()
+        bmpstr = saveBitMap.GetBitmapBits(True)
+
+        # Convert raw data to PIL Image
+        im = Image.frombuffer(
+            'RGB',
+            (bmpinfo['bmWidth'], bmpinfo['bmHeight']),
+            bmpstr, 'raw', 'BGRX', 0, 1
+        )
+        im.save(filename)
+
+        # Cleanup
+        win32gui.DeleteObject(saveBitMap.GetHandle())
+        saveDC.DeleteDC()
+        mfcDC.DeleteDC()
+        win32gui.ReleaseDC(hwnd, hwndDC)
+
+        return bool(result)
+    except Exception:
+        return False
 
 # --- 3. Pembuatan Laporan Word ---
 def create_word_report(filename):
@@ -54,8 +135,27 @@ def create_word_report(filename):
 def main():
     # Make sure the target window is active before running this!
 
-    # Take graph screenshot
-    take_screenshot(GRAPH_REGION, TEMP_GRAPH_FILE)
+    # Try to capture Microsoft Edge window only (preferred)
+    final_capture_ok = False
+    if WIN32_AVAILABLE:
+        hwnd = find_edge_window()
+        if hwnd:
+            print("Found Edge window, capturing only that window...")
+            final_capture_ok = capture_window_only(hwnd, TEMP_GRAPH_FILE)
+            if not final_capture_ok:
+                # If PrintWindow failed, fall back to a region capture of the window rect
+                try:
+                    left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                    region = (left, top, right - left, bottom - top)
+                    take_screenshot(region, TEMP_GRAPH_FILE)
+                    final_capture_ok = True
+                except Exception:
+                    final_capture_ok = False
+
+    if not final_capture_ok:
+        # Fallback: capture preconfigured screen region
+        print("Edge window not found or capture failed — using configured region.")
+        take_screenshot(GRAPH_REGION, TEMP_GRAPH_FILE)
 
     # Ask the user for the report filename via popup (without extension recommended)
     root = tk.Tk()

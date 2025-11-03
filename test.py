@@ -5,16 +5,15 @@ import time
 import os
 import tkinter as tk
 from tkinter import simpledialog
+from datetime import datetime
 
 # --- 1. Configuration (Change to your coordinates) ---
 # Regions are (X start, Y start, Width, Height)
 # Adjust according to your screen layout
 
-GRAPH_REGION = (100, 100, 600, 400)  # (X, Y, W, H) for the graph region
-DATE_REGION = (800, 50, 200, 50)     # (X, Y, W, H) for the date/timestamp region
+GRAPH_REGION = (632, 292, 1269, 583)  # (X, Y, W, H) for the graph region
 
 TEMP_GRAPH_FILE = "temp_graph.png"
-TEMP_DATE_FILE = "temp_date.png"
 FINAL_REPORT_NAME = "Simulation_Report_Final.docx"
 
 # --- 2. Proses Tangkap Layar ---
@@ -36,9 +35,10 @@ def create_word_report(filename):
 
     document.add_heading('STANDARD SIMULATION TEST REPORT', 0)
 
-    # Insert date image (as a small header image)
+    # Insert current date
     document.add_heading('Test date:', level=3)
-    document.add_picture(TEMP_DATE_FILE, width=Inches(2))
+    current_date = datetime.now().strftime("%B %d, %Y %H:%M:%S")
+    document.add_paragraph(current_date)
 
     document.add_paragraph('\n')  # blank line
 
@@ -56,9 +56,6 @@ def main():
 
     # Take graph screenshot
     take_screenshot(GRAPH_REGION, TEMP_GRAPH_FILE)
-
-    # Take date screenshot
-    take_screenshot(DATE_REGION, TEMP_DATE_FILE)
 
     # Ask the user for the report filename via popup (without extension recommended)
     root = tk.Tk()
@@ -84,7 +81,6 @@ def main():
 
     # Clean up temporary files
     os.remove(TEMP_GRAPH_FILE)
-    os.remove(TEMP_DATE_FILE)
     print("Temporary files cleaned up.")
 
 if __name__ == '__main__':

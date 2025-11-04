@@ -9,33 +9,31 @@ from PyQt5.QtWidgets import (
     QDialog,
     QLineEdit,
     QInputDialog,
+    QFileDialog, # New: For file selection
 )
 from PyQt5.QtGui import QPixmap, QPainter, QPen, QColor, QImage
-from PyQt5.QtCore import Qt, QPoint, QRect
-from PIL import ImageGrab, Image  # Pillow for screenshotting
+from PyQt5.QtCore import Qt, QPoint, QRect, QDir # New: QDir
+from PIL import ImageGrab, Image
 from docx import Document
 from docx.shared import Inches
-from datetime import date  # New: Import date for current date
+from datetime import datetime
 import os
 import time
 
-# --- Configuration (Report Name will be prompted) ---
-FINAL_PDF_FILE_BASE = "Interactive_Test_Report_Final.pdf"  # Base name, will be modified with user input
-TEMPLATES_PATH = os.path.join(os.path.dirname(__file__), "templates")  # Directory for Word template
-if not os.path.exists(TEMPLATES_PATH):
-    os.makedirs(TEMPLATES_PATH)
-WORD_TEMPLATE_REPORT = os.path.join(TEMPLATES_PATH, "report_template.docx")
+# --- Configuration & Template Management ---
 
-# Create a dummy template if it doesn't exist
-if not os.path.exists(WORD_TEMPLATE_REPORT):
+def create_dummy_template(filepath, placeholder_text):
+    """Creates a basic template with the required placeholder if the file does not exist."""
+    print(f"Template '{filepath}' not found. Creating a dummy template with placeholder.")
     doc = Document()
-    doc.add_heading("TEST REPORT", 0)
-    doc.add_heading("Test Results Graph:", level=3)
-    doc.add_paragraph(" [Area for Graph] ")
-    doc.add_heading("Testing Date:", level=3)
-    doc.add_paragraph(" [Area for Date - Replaced by Live Date] ")
-    doc.save(WORD_TEMPLATE_REPORT)
-    print(f"Dummy Word template '{WORD_TEMPLATE_REPORT}' created.")
+    doc.add_heading("INTERACTIVE TEST REPORT", 0)
+    doc.add_paragraph("This report was generated using the screenshot tool.")
+    doc.add_heading("Results Insertion Area:", level=3)
+    doc.add_paragraph(f"Placeholder for content: **{placeholder_text}**")
+    doc.add_paragraph(placeholder_text) # The actual placeholder string
+    doc.save(filepath)
+    print(f"Dummy Word template '{filepath}' created.")
+    return filepath
 
 
 class ScreenshotSelector(QDialog):
@@ -45,7 +43,8 @@ class ScreenshotSelector(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Select Screenshot Area")
         # Set the dialog size to cover the entire screen
-        self.setGeometry(0, 0, full_screen_image.width(), full_screen_image.height())
+        desktop = QApplication.instance().desktop()
+        self.setGeometry(0, 0, desktop.width(), desktop.height())
         # Frameless window, always on top
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setCursor(Qt.CrossCursor)  # Cursor becomes crosshair
@@ -92,27 +91,62 @@ class App:
 
     def __init__(self):
         self.graph_path = "graph_temp.png"
-        # self.date_path is no longer needed as the date is generated programmatically
+        self.input_template_path = ""
         self.final_report_name = ""
         self.final_pdf_name = ""
+        self.placeholder_text = "[INSERT_CONTENT_HERE]" # Default placeholder
 
-    def get_report_name(self):
-        """Prompts the user for the final report name."""
-        text, ok = QInputDialog.getText(
+    def get_report_details(self):
+        """Prompts the user for all necessary report details."""
+        
+        # 1. Get Placeholder Text
+        ph_text, ok = QInputDialog.getText(
             None,
-            "Report Name Input",
-            'Enter the desired name for the final DOCX report (e.g., "System_Test_A"):',
+            "Placeholder Input",
+            'Enter the **UNIQUE TEXT** in your document where the image and date should be inserted. (e.g., "[GRAPH_LOC_1]")',
             QLineEdit.Normal,
-            f"Test_Report_{date.today().strftime('%Y%m%d')}",
+            self.placeholder_text,
+        )
+        if ok and ph_text:
+            self.placeholder_text = ph_text.strip()
+        else:
+            return False
+
+        # 2. Get Input Template Path (using QFileDialog for better UX)
+        input_template_path, _ = QFileDialog.getOpenFileName(
+            None,
+            "Select Input Word Template (.docx)",
+            QDir.currentPath(),
+            "Word Documents (*.docx)",
+        )
+        if input_template_path:
+            self.input_template_path = input_template_path
+        else:
+            QMessageBox.warning(None, "Warning", "No template file selected. Using 'default_template.docx'.")
+            self.input_template_path = "default_template.docx"
+
+        # If the selected file doesn't exist, create a dummy one
+        if not os.path.exists(self.input_template_path):
+             create_dummy_template(self.input_template_path, self.placeholder_text)
+
+
+        # 3. Get Final Output Report Name
+        base_template_name = os.path.splitext(os.path.basename(self.input_template_path))[0]
+        default_output_name = f"{base_template_name}_Output_{datetime.now().strftime('%Y%m%d')}.docx"
+
+        output_name, ok = QInputDialog.getText(
+            None,
+            "Output Name Input",
+            'Enter the desired name for the final DOCX report:',
+            QLineEdit.Normal,
+            default_output_name,
         )
 
-        if ok and text:
-            # Ensure it ends with .docx
-            self.final_report_name = text.strip()
+        if ok and output_name:
+            self.final_report_name = output_name.strip()
             if not self.final_report_name.lower().endswith(".docx"):
                 self.final_report_name += ".docx"
-
-            # Set the PDF name based on the DOCX name
+            
             base_name = os.path.splitext(self.final_report_name)[0]
             self.final_pdf_name = base_name + ".pdf"
             return True
@@ -127,20 +161,23 @@ class App:
             f"Click OK, then **{prompt_text}** using Drag-and-Drop on the screen.",
         )
 
-        # Temporarily hide PyQt application window before taking the screenshot
         app = QApplication.instance()
         if app:
             for widget in app.topLevelWidgets():
-                widget.hide()
+                # Check if it's the main application window and hide it
+                if isinstance(widget, QWidget) and widget.windowTitle() == "PyQt Report Generator":
+                    widget.hide()
+                    break # Assuming only one main window to hide
 
-        time.sleep(0.5)  # Give time for the window to hide
+        time.sleep(0.5) 
 
-        full_screen_image_pil = ImageGrab.grab()  # Capture full screen screenshot
+        full_screen_image_pil = ImageGrab.grab()
 
         if app:
-            # Show PyQt application window again after screenshot capture
             for widget in app.topLevelWidgets():
-                widget.show()
+                if isinstance(widget, QWidget) and widget.windowTitle() == "PyQt Report Generator":
+                    widget.show()
+                    break
 
         # Convert PIL Image to Qt-compatible format (QImage)
         img_data = full_screen_image_pil.tobytes("raw", "RGB")
@@ -153,11 +190,8 @@ class App:
         )
 
         selector = ScreenshotSelector(full_screen_image_qt)
-        # Run dialog and wait until finished
         selector.exec()
 
-        # After the user finishes selection and the selector window is closed,
-        # we get the selection coordinates
         x = selector.selection_rect.x()
         y = selector.selection_rect.y()
         w = selector.selection_rect.width()
@@ -171,61 +205,101 @@ class App:
         cropped_image_pil = full_screen_image_pil.crop((x, y, x + w, y + h))
         return cropped_image_pil
 
-    def find_and_replace_text(self, document, old_text, new_text):
-        """Finds and replaces text in all paragraphs of a Word document."""
+    def insert_content_at_placeholder(self, document, placeholder, image_path, date_str):
+        """Finds the placeholder and replaces it with the date and image."""
+        
+        insertion_successful = False
+        
         for paragraph in document.paragraphs:
-            if old_text in paragraph.text:
-                paragraph.text = paragraph.text.replace(old_text, new_text)
-        return document
+            if placeholder in paragraph.text:
+                # 1. Clear the placeholder text
+                paragraph.text = paragraph.text.replace(placeholder, "")
+
+                # 2. Get custom text from user and insert with date
+                custom_text, ok = QInputDialog.getText(
+                    None,
+                    "Custom Text Input",
+                    "Enter the text you want to add before the date:",
+                    QLineEdit.Normal,
+                    "Report Content Inserted"
+                )
+                if ok:
+                    run_date = paragraph.add_run()
+                    run_date.add_text(f"{custom_text}: {date_str}\n")
+                    run_date.bold = True
+                
+                # 3. Insert the Image
+                paragraph.add_run().add_picture(image_path, width=Inches(6))
+                
+                insertion_successful = True
+                break  # Assuming only one insertion per report
+
+        if not insertion_successful:
+            QMessageBox.critical(None, "Error", f"Could not find the unique placeholder text: '{placeholder}' in the document.")
+        
+        return document, insertion_successful
 
     def run(self):
-        # 1. Get Report Name from User
-        if not self.get_report_name():
-            QMessageBox.critical(None, "Error", "Report name not provided. Exiting.")
+        # 0. Set up a dummy main window title for hiding logic
+        main_window = QWidget()
+        main_window.setWindowTitle("PyQt Report Generator")
+        main_window.setGeometry(100, 100, 300, 100)
+        main_window.show()
+
+
+        # 1. Get Report Details from User
+        if not self.get_report_details():
+            QMessageBox.critical(None, "Error", "Report details not provided. Exiting.")
+            main_window.close()
             return
 
         QMessageBox.information(
             None,
             "Start Application",
-            f"Report name set to: **{self.final_report_name}**. Click OK to start screenshot capture.",
+            f"Input Template: **{os.path.basename(self.input_template_path)}**\nOutput Report: **{self.final_report_name}**\nInsertion Placeholder: **{self.placeholder_text}**\n\nClick OK to start screenshot capture.",
         )
+        main_window.hide()
 
         # 2. Capture Graph Screenshot
         graph_image = self.take_interactive_screenshot("select the **GRAPH** area")
+        
         if graph_image:
             graph_image.save(self.graph_path)
             print("Graph screenshot captured successfully.")
         else:
-            return  # Exit if graph capture fails
-
-        # The date screenshot capture is REMOVED as per the requirement for automated date
+            main_window.show()
+            return 
 
         # 3. Create Word Report
         print("Starting Word document creation...")
-        document = Document(WORD_TEMPLATE_REPORT)
+        try:
+            document = Document(self.input_template_path)
+        except Exception as e:
+            QMessageBox.critical(None, "Error Loading Document", f"Failed to load document '{self.input_template_path}'. Error: {e}")
+            main_window.show()
+            return
 
-        # Get the current date and format it
-        current_date_str = date.today().strftime("%Y-%m-%d")  # e.g., 2023-11-04
+        # Get the current date
+        current_date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # Find and replace the Date placeholder
-        self.find_and_replace_text(document, "[Area for Date - Replaced by Live Date]", current_date_str)
-        self.find_and_replace_text(document, "[Area for Date]", current_date_str)
-
-        # Insert Graph (replacing the placeholder text by inserting the image after the paragraph)
-        for paragraph in document.paragraphs:
-            if "[Area for Graph]" in paragraph.text:
-                paragraph.text = paragraph.text.replace("[Area for Graph]", "")  # Clear the placeholder text
-                paragraph.add_run().add_picture(self.graph_path, width=Inches(6))  # Insert image
-                break  # Assuming only one placeholder for the graph
+        # Find and replace the placeholder with content
+        document, success = self.insert_content_at_placeholder(
+            document, 
+            self.placeholder_text, 
+            self.graph_path, 
+            current_date_str
+        )
+        
+        if not success:
+            main_window.show()
+            return
 
         document.save(self.final_report_name)
         print(f"\n✅ Final Word report saved as: {self.final_report_name}")
 
-        # 4. Convert to PDF (Mostly for Windows environments)
+        # 4. Convert to PDF (Optional/Non-Essential)
         try:
             import docxtopdf
-
-            # Provide an explicit output filename to docxtopdf
             docxtopdf.convert(self.final_report_name, self.final_pdf_name)
             print(f"✅ Final PDF report saved as: {self.final_pdf_name}")
         except ImportError:
@@ -237,10 +311,12 @@ class App:
         if os.path.exists(self.graph_path):
             os.remove(self.graph_path)
         print("Temporary files cleaned up.")
+        
+        main_window.show()
         QMessageBox.information(
             None,
             "Finished",
-            f"Report '{self.final_report_name}' and '{self.final_pdf_name}' have been created.",
+            f"Report '{self.final_report_name}' has been created from '{os.path.basename(self.input_template_path)}'.",
         )
 
 

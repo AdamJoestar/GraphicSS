@@ -90,27 +90,34 @@ class App:
     """Main application logic for capturing screenshots and generating the report."""
 
     def __init__(self):
-        self.graph_path = "graph_temp.png"
+        self.screenshots = []  # List to store multiple screenshots and their info
         self.input_template_path = ""
         self.final_report_name = ""
         self.final_pdf_name = ""
-        self.placeholder_text = "[INSERT_CONTENT_HERE]" # Default placeholder
+        self.base_placeholder = "[GRAPH_{0}]"  # Placeholder template with index
 
     def get_report_details(self):
         """Prompts the user for all necessary report details."""
         
-        # 1. Get Placeholder Text
-        ph_text, ok = QInputDialog.getText(
+        # 1. Get Number of Screenshots
+        num_screenshots, ok = QInputDialog.getInt(
             None,
-            "Placeholder Input",
-            'Enter the **UNIQUE TEXT** in your document where the image and date should be inserted. (e.g., "[GRAPH_LOC_1]")',
-            QLineEdit.Normal,
-            self.placeholder_text,
+            "Number of Screenshots",
+            "How many screenshots do you want to insert?",
+            1, 1, 10  # min 1, max 10 screenshots
         )
-        if ok and ph_text:
-            self.placeholder_text = ph_text.strip()
-        else:
+        if not ok:
             return False
+            
+        # Store the placeholders
+        self.screenshots = []
+        for i in range(num_screenshots):
+            placeholder = self.base_placeholder.format(i + 1)
+            self.screenshots.append({
+                'placeholder': placeholder,
+                'image_path': f"graph_temp_{i+1}.png",
+                'custom_text': f"Figure {i+1}"
+            })
 
         # 2. Get Input Template Path (using QFileDialog for better UX)
         input_template_path, _ = QFileDialog.getOpenFileName(
@@ -127,7 +134,8 @@ class App:
 
         # If the selected file doesn't exist, create a dummy one
         if not os.path.exists(self.input_template_path):
-             create_dummy_template(self.input_template_path, self.placeholder_text)
+            # use the first placeholder as the template placeholder
+            create_dummy_template(self.input_template_path, self.base_placeholder.format(1))
 
 
         # 3. Get Final Output Report Name
@@ -205,39 +213,49 @@ class App:
         cropped_image_pil = full_screen_image_pil.crop((x, y, x + w, y + h))
         return cropped_image_pil
 
-    def insert_content_at_placeholder(self, document, placeholder, image_path, date_str):
-        """Finds the placeholder and replaces it with the date and image."""
-        
-        insertion_successful = False
-        
-        for paragraph in document.paragraphs:
-            if placeholder in paragraph.text:
-                # 1. Clear the placeholder text
-                paragraph.text = paragraph.text.replace(placeholder, "")
+    def insert_content_at_placeholder(self, document, date_str):
+        """Insert all screenshots and their custom text into the document at their placeholders.
 
-                # 2. Get custom text from user and insert with date
-                custom_text, ok = QInputDialog.getText(
-                    None,
-                    "Custom Text Input",
-                    "Enter the text you want to add before the date:",
-                    QLineEdit.Normal,
-                    "Report Content Inserted"
-                )
-                if ok:
+        Returns (document, success)
+        """
+        for screenshot in self.screenshots:
+            insertion_found = False
+            for paragraph in document.paragraphs:
+                if screenshot['placeholder'] in paragraph.text:
+                    # Clear the placeholder
+                    paragraph.text = paragraph.text.replace(screenshot['placeholder'], "")
+
+                    # Ask for custom text (default to stored custom_text)
+                    custom_text, ok = QInputDialog.getText(
+                        None,
+                        "Custom Text Input",
+                        f"Enter the text you want to add before the date for {screenshot['placeholder']}:",
+                        QLineEdit.Normal,
+                        screenshot.get('custom_text', 'Report Content Inserted')
+                    )
+                    if not ok or not custom_text:
+                        custom_text = screenshot.get('custom_text', 'Report Content Inserted')
+
+                    # Insert custom text + date
                     run_date = paragraph.add_run()
                     run_date.add_text(f"{custom_text}: {date_str}\n")
                     run_date.bold = True
-                
-                # 3. Insert the Image
-                paragraph.add_run().add_picture(image_path, width=Inches(6))
-                
-                insertion_successful = True
-                break  # Assuming only one insertion per report
 
-        if not insertion_successful:
-            QMessageBox.critical(None, "Error", f"Could not find the unique placeholder text: '{placeholder}' in the document.")
-        
-        return document, insertion_successful
+                    # Insert image
+                    try:
+                        paragraph.add_run().add_picture(screenshot['image_path'], width=Inches(6))
+                    except Exception as e:
+                        QMessageBox.critical(None, "Error", f"Failed to insert image {screenshot['image_path']}: {e}")
+                        return document, False
+
+                    insertion_found = True
+                    break
+
+            if not insertion_found:
+                QMessageBox.critical(None, "Error", f"Could not find the unique placeholder text: '{screenshot['placeholder']}' in the document.")
+                return document, False
+
+        return document, True
 
     def run(self):
         # 0. Set up a dummy main window title for hiding logic
@@ -253,75 +271,85 @@ class App:
             main_window.close()
             return
 
+        # show all placeholders that will be used
+        placeholders_str = ", ".join([s['placeholder'] for s in self.screenshots])
         QMessageBox.information(
             None,
             "Start Application",
-            f"Input Template: **{os.path.basename(self.input_template_path)}**\nOutput Report: **{self.final_report_name}**\nInsertion Placeholder: **{self.placeholder_text}**\n\nClick OK to start screenshot capture.",
+            f"Input Template: **{os.path.basename(self.input_template_path)}**\nOutput Report: **{self.final_report_name}**\nInsertion Placeholders: **{placeholders_str}**\n\nClick OK to start screenshot capture.",
         )
         main_window.hide()
 
-        # 2. Capture Graph Screenshot
-        while True:
-            graph_image = self.take_interactive_screenshot("select the **GRAPH** area")
-            
-            if not graph_image:
-                main_window.show()
-                return
-                
-            # Save temporary image for preview
-            graph_image.save(self.graph_path)
-            print("Graph screenshot captured.")
-            
-            # Create preview dialog
-            preview_dialog = QDialog()
-            preview_dialog.setWindowTitle("Screenshot Preview")
-            preview_dialog.setMinimumSize(400, 400)
-            
-            # Create layout
-            layout = QVBoxLayout()
-            
-            # Add preview image
-            preview_label = QLabel()
-            pixmap = QPixmap(self.graph_path)
-            scaled_pixmap = pixmap.scaled(350, 350, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            preview_label.setPixmap(scaled_pixmap)
-            layout.addWidget(preview_label)
-            
-            # Add confirmation message
-            layout.addWidget(QLabel("Is this screenshot correct?"))
-            
-            # Add buttons
-            button_box = QVBoxLayout()
-            confirm_button = QPushButton("Yes, Continue")
-            retake_button = QPushButton("No, Retake Screenshot")
-            cancel_button = QPushButton("Cancel")
-            
-            button_box.addWidget(confirm_button)
-            button_box.addWidget(retake_button)
-            button_box.addWidget(cancel_button)
-            layout.addLayout(button_box)
-            
-            preview_dialog.setLayout(layout)
-            
-            # Connect button signals
-            confirm_button.clicked.connect(preview_dialog.accept)
-            retake_button.clicked.connect(preview_dialog.reject)
-            cancel_button.clicked.connect(lambda: preview_dialog.done(2))
-            
-            # Show dialog and get result
-            result = preview_dialog.exec_()
-            
-            if result == QDialog.Accepted:  # User confirmed screenshot
-                print("Screenshot confirmed.")
-                break
-            elif result == 2:  # User cancelled
-                if os.path.exists(self.graph_path):
-                    os.remove(self.graph_path)
-                main_window.show()
-                return
-            else:  # User wants to retake
-                print("Retaking screenshot...")
-                continue
+        # 2. Capture Multiple Screenshots (with preview and retake)
+        for i, screenshot_info in enumerate(self.screenshots):
+            QMessageBox.information(
+                None,
+                "Next Screenshot",
+                f"Ready to capture screenshot {i+1} of {len(self.screenshots)}\nThis will be inserted at placeholder: {screenshot_info['placeholder']}"
+            )
+
+            while True:
+                graph_image = self.take_interactive_screenshot(f"select area for {screenshot_info['placeholder']}")
+
+                if not graph_image:
+                    main_window.show()
+                    return
+
+                # Save temporary image for preview
+                graph_image.save(screenshot_info['image_path'])
+                print(f"Screenshot {i+1} captured.")
+
+                # Create preview dialog
+                preview_dialog = QDialog()
+                preview_dialog.setWindowTitle("Screenshot Preview")
+                preview_dialog.setMinimumSize(400, 400)
+
+                # Create layout
+                layout = QVBoxLayout()
+
+                # Add preview image
+                preview_label = QLabel()
+                pixmap = QPixmap(screenshot_info['image_path'])
+                scaled_pixmap = pixmap.scaled(350, 350, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                preview_label.setPixmap(scaled_pixmap)
+                layout.addWidget(preview_label)
+
+                # Add confirmation message
+                layout.addWidget(QLabel("Is this screenshot correct?"))
+
+                # Add buttons
+                button_box = QVBoxLayout()
+                confirm_button = QPushButton("Yes, Continue")
+                retake_button = QPushButton("No, Retake Screenshot")
+                cancel_button = QPushButton("Cancel")
+
+                button_box.addWidget(confirm_button)
+                button_box.addWidget(retake_button)
+                button_box.addWidget(cancel_button)
+                layout.addLayout(button_box)
+
+                preview_dialog.setLayout(layout)
+
+                # Connect button signals
+                confirm_button.clicked.connect(preview_dialog.accept)
+                retake_button.clicked.connect(preview_dialog.reject)
+                cancel_button.clicked.connect(lambda: preview_dialog.done(2))
+
+                # Show dialog and get result
+                result = preview_dialog.exec_()
+
+                if result == QDialog.Accepted:  # User confirmed screenshot
+                    print("Screenshot confirmed.")
+                    break
+                elif result == 2:  # User cancelled
+                    # remove any saved temp files and exit
+                    if os.path.exists(screenshot_info['image_path']):
+                        os.remove(screenshot_info['image_path'])
+                    main_window.show()
+                    return
+                else:  # User wants to retake
+                    print("Retaking screenshot...")
+                    continue
 
         # 3. Create Word Report
         print("Starting Word document creation...")
@@ -335,13 +363,8 @@ class App:
         # Get the current date
         current_date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # Find and replace the placeholder with content
-        document, success = self.insert_content_at_placeholder(
-            document, 
-            self.placeholder_text, 
-            self.graph_path, 
-            current_date_str
-        )
+        # Insert all screenshots and their content into the document
+        document, success = self.insert_content_at_placeholder(document, current_date_str)
         
         if not success:
             main_window.show()
@@ -361,8 +384,9 @@ class App:
             print(f"Error converting to PDF: {e}. Make sure MS Word is installed.")
 
         # 5. Clean up temporary files
-        if os.path.exists(self.graph_path):
-            os.remove(self.graph_path)
+        for screenshot in self.screenshots:
+            if os.path.exists(screenshot['image_path']):
+                os.remove(screenshot['image_path'])
         print("Temporary files cleaned up.")
         
         main_window.show()

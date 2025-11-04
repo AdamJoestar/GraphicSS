@@ -1,187 +1,184 @@
-import pyautogui
+import sys
+from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QVBoxLayout, QPushButton, QMessageBox, QDialog
+from PyQt5.QtGui import QPixmap, QPainter, QPen, QColor, QImage
+from PyQt5.QtCore import Qt, QPoint, QRect
+from PIL import ImageGrab, Image # Pillow untuk screenshot
 from docx import Document
 from docx.shared import Inches
-import time
 import os
-import tkinter as tk
-from tkinter import simpledialog
-from datetime import datetime
-try:
-    # Windows-only imports for window capture
-    import win32gui
-    import win32ui
-    import win32con
-    import win32api
-    from PIL import Image
-    WIN32_AVAILABLE = True
-except Exception:
-    WIN32_AVAILABLE = False
+import time
 
-# --- 1. Configuration (Change to your coordinates) ---
-# Regions are (X start, Y start, Width, Height)
-# Adjust according to your screen layout
+# --- Konfigurasi ---
+NAMA_LAPORAN_FINAL = "Laporan_Uji_Interaktif_Final.docx"
+FILE_FINAL_PDF = "Laporan_Uji_Interaktif_Final.pdf" # Hanya berlaku jika docxtopdf berfungsi
+PATH_TEMPLATES = os.path.join(os.path.dirname(__file__), "templates") # Direktori untuk template Word
+if not os.path.exists(PATH_TEMPLATES):
+    os.makedirs(PATH_TEMPLATES)
+TEMPLATE_LAPORAN_WORD = os.path.join(PATH_TEMPLATES, "template_laporan.docx")
 
-GRAPH_REGION = (632, 292, 1269, 583)  # (X, Y, W, H) for the graph region
-
-TEMP_GRAPH_FILE = "temp_graph.png"
-FINAL_REPORT_NAME = "Simulation_Report_Final.docx"
-
-# --- 2. Proses Tangkap Layar ---
-def take_screenshot(region, filename):
-    # Small pause to ensure the target window is focused
-    time.sleep(1)
-    print(f"Taking screenshot: {filename}...")
-
-    # Capture the specified region and save
-    im = pyautogui.screenshot(region=region)
-    im.save(filename)
-    print(f"Screenshot {filename} saved.")
+# Buat template dummy jika belum ada
+if not os.path.exists(TEMPLATE_LAPORAN_WORD):
+    doc = Document()
+    doc.add_heading('LAPORAN UJI', 0)
+    doc.add_heading('Grafik Hasil Uji:', level=3)
+    doc.add_paragraph(' [Area untuk Grafik] ')
+    doc.add_heading('Tanggal Pengujian:', level=3)
+    doc.add_paragraph(' [Area untuk Tanggal] ')
+    doc.save(TEMPLATE_LAPORAN_WORD)
+    print(f"Template Word dummy '{TEMPLATE_LAPORAN_WORD}' dibuat.")
 
 
-def find_edge_window():
-    """Return the HWND of a Microsoft Edge window (first match) or None."""
-    if not WIN32_AVAILABLE:
-        return None
+class ScreenshotSelector(QDialog):
+    def __init__(self, full_screen_image, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Pilih Area Screenshot")
+        self.setGeometry(0, 0, full_screen_image.width(), full_screen_image.height())
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint) # Tanpa bingkai, selalu di atas
+        self.setCursor(Qt.CrossCursor) # Kursor jadi tanda plus
+        
+        self.full_screen_pixmap = QPixmap.fromImage(full_screen_image)
+        self.start_point = QPoint()
+        self.end_point = QPoint()
+        self.selection_rect = QRect()
+        self.is_drawing = False
 
-    def _enum(hwnd, results):
-        if not win32gui.IsWindowVisible(hwnd):
-            return
-        title = win32gui.GetWindowText(hwnd) or ""
-        cls = win32gui.GetClassName(hwnd) or ""
-        # Match common Edge window title/class (Edge is Chromium-based)
-        if 'edge' in title.lower() or 'microsoft edge' in title.lower() or 'msedge' in title.lower():
-            results.append(hwnd)
-        elif 'chrome' in cls.lower() or 'chrome_widget_win' in cls.lower():
-            # Edge uses Chromium class names in some versions; also check title for Edge
-            if 'edge' in title.lower() or 'microsoft edge' in title.lower():
-                results.append(hwnd)
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.drawPixmap(0, 0, self.full_screen_pixmap)
+        
+        if self.is_drawing:
+            pen = QPen(QColor(255, 0, 0)) # Warna merah
+            pen.setWidth(2)
+            painter.setPen(pen)
+            painter.drawRect(self.selection_rect)
 
-    matches = []
-    win32gui.EnumWindows(_enum, matches)
-    return matches[0] if matches else None
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.start_point = event.pos()
+            self.end_point = event.pos()
+            self.is_drawing = True
+            self.selection_rect = QRect(self.start_point, self.end_point).normalized()
+            self.update()
 
+    def mouseMoveEvent(self, event):
+        if self.is_drawing:
+            self.end_point = event.pos()
+            self.selection_rect = QRect(self.start_point, self.end_point).normalized()
+            self.update()
 
-def capture_window_only(hwnd, filename):
-    """Capture the given window's image (hwnd) to filename using PrintWindow.
-    Falls back to region screenshot if PrintWindow fails or win32 not available.
-    """
-    if not WIN32_AVAILABLE or hwnd is None:
-        return False
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.is_drawing = False
+            self.close() # Tutup jendela setelah seleksi selesai
 
-    try:
-        # Get window rectangle (including borders)
-        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
-        width = right - left
-        height = bottom - top
+class App:
+    def __init__(self):
+        self.grafik_path = "grafik_temp.png"
+        self.tanggal_path = "tanggal_temp.png"
 
-        # Create device context
-        hwndDC = win32gui.GetWindowDC(hwnd)
-        mfcDC = win32ui.CreateDCFromHandle(hwndDC)
-        saveDC = mfcDC.CreateCompatibleDC()
+    def ambil_screenshot_interaktif(self, prompt_text="Pilih area"):
+        QMessageBox.information(None, "Siap Untuk Screenshot", f"Klik OK, lalu {prompt_text} dengan Drag-and-Drop di layar.")
+        
+        # Sembunyikan aplikasi PyQt sementara untuk mengambil screenshot layar penuh
+        # ini penting agar jendela aplikasi kita tidak ikut di-screenshot
+        app = QApplication.instance()
+        if app:
+            for widget in app.topLevelWidgets():
+                widget.hide()
+        
+        time.sleep(0.5) # Beri waktu untuk menyembunyikan jendela
 
-        # Create bitmap to save
-        saveBitMap = win32ui.CreateBitmap()
-        saveBitMap.CreateCompatibleBitmap(mfcDC, width, height)
-        saveDC.SelectObject(saveBitMap)
+        full_screen_image_pil = ImageGrab.grab() # Ambil screenshot seluruh layar
+        
+        if app:
+            for widget in app.topLevelWidgets():
+                widget.show() # Tampilkan kembali jendela aplikasi PyQt setelah screenshot
+        
+        # Konversi PIL Image ke format yang bisa digunakan oleh Qt
+        img_data = full_screen_image_pil.tobytes('raw', 'RGB')
+        full_screen_image_qt = QImage(img_data, full_screen_image_pil.size[0], full_screen_image_pil.size[1], full_screen_image_pil.size[0] * 3, QImage.Format_RGB888)
+        
+        selector = ScreenshotSelector(full_screen_image_qt)
+        # Jalankan dialog dan tunggu sampai selesai
+        selector.exec()
+        
+        # Setelah user selesai menyeleksi dan jendela selector ditutup,
+        # kita bisa mendapatkan koordinat seleksi
+        x, y, w, h = selector.selection_rect.x(), selector.selection_rect.y(), selector.selection_rect.width(), selector.selection_rect.height()
+        
+        if w == 0 or h == 0:
+            QMessageBox.warning(None, "Peringatan", "Area tidak dipilih atau terlalu kecil. Silakan coba lagi.")
+            return None
+            
+        # Potong gambar sesuai seleksi
+        cropped_image_pil = full_screen_image_pil.crop((x, y, x + w, y + h))
+        return cropped_image_pil
 
-        # Try PrintWindow (1 to include layered windows)
-        result = win32gui.PrintWindow(hwnd, saveDC.GetSafeHdc(), 1)
-
-        bmpinfo = saveBitMap.GetInfo()
-        bmpstr = saveBitMap.GetBitmapBits(True)
-
-        # Convert raw data to PIL Image
-        im = Image.frombuffer(
-            'RGB',
-            (bmpinfo['bmWidth'], bmpinfo['bmHeight']),
-            bmpstr, 'raw', 'BGRX', 0, 1
-        )
-        im.save(filename)
-
-        # Cleanup
-        win32gui.DeleteObject(saveBitMap.GetHandle())
-        saveDC.DeleteDC()
-        mfcDC.DeleteDC()
-        win32gui.ReleaseDC(hwnd, hwndDC)
-
-        return bool(result)
-    except Exception:
-        return False
-
-# --- 3. Pembuatan Laporan Word ---
-def create_word_report(filename):
-    """Create and save a Word report with the given filename."""
-    print("Starting Word document creation...")
-    document = Document()
-
-    document.add_heading('STANDARD SIMULATION TEST REPORT', 0)
-
-    # Insert current date
-    document.add_heading('Test date:', level=3)
-    current_date = datetime.now().strftime("%B %d, %Y %H:%M:%S")
-    document.add_paragraph(current_date)
-
-    document.add_paragraph('\n')  # blank line
-
-    # Insert graph
-    document.add_heading('Graph:', level=3)
-    document.add_picture(TEMP_GRAPH_FILE, width=Inches(6))
-
-    # Save document
-    document.save(filename)
-    print(f"\n✅ Final Word report saved as: {filename}")
-
-# --- 4. Fungsi Utama ---
-def main():
-    # Make sure the target window is active before running this!
-
-    # Try to capture Microsoft Edge window only (preferred)
-    final_capture_ok = False
-    if WIN32_AVAILABLE:
-        hwnd = find_edge_window()
-        if hwnd:
-            print("Found Edge window, capturing only that window...")
-            final_capture_ok = capture_window_only(hwnd, TEMP_GRAPH_FILE)
-            if not final_capture_ok:
-                # If PrintWindow failed, fall back to a region capture of the window rect
-                try:
-                    left, top, right, bottom = win32gui.GetWindowRect(hwnd)
-                    region = (left, top, right - left, bottom - top)
-                    take_screenshot(region, TEMP_GRAPH_FILE)
-                    final_capture_ok = True
-                except Exception:
-                    final_capture_ok = False
-
-    if not final_capture_ok:
-        # Fallback: capture preconfigured screen region
-        print("Edge window not found or capture failed — using configured region.")
-        take_screenshot(GRAPH_REGION, TEMP_GRAPH_FILE)
-
-    # Ask the user for the report filename via popup (without extension recommended)
-    root = tk.Tk()
-    root.withdraw()  # hide main window
-    default_name = os.path.splitext(FINAL_REPORT_NAME)[0]
-    user_input = simpledialog.askstring("Save Report", "Enter report file name (without extension):", initialvalue=default_name)
-    root.destroy()
-
-    if user_input is None:
-        # If user cancels, use the default name
-        final_filename = FINAL_REPORT_NAME
-    else:
-        user_input = user_input.strip()
-        if user_input == "":
-            final_filename = FINAL_REPORT_NAME
+    def run(self):
+        QMessageBox.information(None, "Mulai Aplikasi", "Aplikasi siap mengambil screenshot untuk laporan. Klik OK.")
+        
+        # 1. Ambil Screenshot Grafik
+        grafik_image = self.ambil_screenshot_interaktif("pilih area GRAFIK")
+        if grafik_image:
+            grafik_image.save(self.grafik_path)
+            print("Grafik berhasil di-screenshot.")
         else:
-            if not user_input.lower().endswith('.docx'):
-                user_input = user_input + '.docx'
-            final_filename = user_input
+            return
 
-    # Create report
-    create_word_report(final_filename)
+        # 2. Ambil Screenshot Tanggal
+        tanggal_image = self.ambil_screenshot_interaktif("pilih area TANGGAL")
+        if tanggal_image:
+            tanggal_image.save(self.tanggal_path)
+            print("Tanggal berhasil di-screenshot.")
+        else:
+            # Jika user tidak memilih tanggal, kita bisa skip atau pakai tanggal sistem
+            QMessageBox.information(None, "Info", "Pengambilan tanggal dilewati.")
+            # Misalnya, gunakan tanggal sistem jika tidak ada screenshot tanggal
+            # document.add_paragraph(f"Tanggal Pengujian: {time.strftime('%Y-%m-%d')}")
 
-    # Clean up temporary files
-    os.remove(TEMP_GRAPH_FILE)
-    print("Temporary files cleaned up.")
+
+        # 3. Buat Laporan Word
+        print("Memulai pembuatan dokumen Word...")
+        document = Document(TEMPLATE_LAPORAN_WORD)
+        
+        # Cari dan ganti placeholder atau sisipkan di akhir
+        # Untuk kasus ini, kita sisipkan di akhir dokumen, atau Anda bisa menargetkan placeholder spesifik
+        
+        # Sisipkan Tanggal (jika ada)
+        if os.path.exists(self.tanggal_path):
+            document.add_picture(self.tanggal_path, width=Inches(2)) # Sesuaikan ukuran
+            document.add_paragraph('\n')
+        
+        # Sisipkan Grafik (jika ada)
+        if os.path.exists(self.grafik_path):
+            document.add_picture(self.grafik_path, width=Inches(6)) # Sesuaikan ukuran
+            document.add_paragraph('\n')
+        
+        document.save(NAMA_LAPORAN_FINAL)
+        print(f"\n✅ Laporan Word final disimpan sebagai: {NAMA_LAPORAN_FINAL}")
+
+        # 4. Konversi ke PDF (Hanya untuk Windows)
+        try:
+            import docxtopdf
+            docxtopdf.convert(NAMA_LAPORAN_FINAL)
+            print(f"✅ Laporan PDF final disimpan sebagai: {FILE_FINAL_PDF}")
+        except ImportError:
+            print("Peringatan: docxtopdf tidak terinstal atau tidak mendukung OS ini. PDF tidak dibuat.")
+        except Exception as e:
+            print(f"Error saat mengkonversi ke PDF: {e}. Pastikan MS Word terinstal.")
+
+
+        # 5. Bersihkan file temporer
+        if os.path.exists(self.grafik_path):
+            os.remove(self.grafik_path)
+        if os.path.exists(self.tanggal_path):
+            os.remove(self.tanggal_path)
+        print("File temporer dibersihkan.")
+        QMessageBox.information(None, "Selesai", f"Laporan '{NAMA_LAPORAN_FINAL}' dan '{FILE_FINAL_PDF}' telah dibuat.")
+
 
 if __name__ == '__main__':
-    main()
+    app = QApplication(sys.argv)
+    main_app = App()
+    main_app.run()
+    sys.exit(app.exec_())

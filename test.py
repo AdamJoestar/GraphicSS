@@ -324,6 +324,21 @@ if __name__ == '__main__':
     # Initialize the QApplication instance before creating any Qt widgets
     app = QApplication(sys.argv)
     main_app = App()
-    main_app.run()
-    # Execute the application's event loop
-    sys.exit(app.exec_())
+    
+    while True:
+        main_app.run()
+        
+        # Ask if user wants to continue
+        response = QMessageBox.question(
+            None,
+            "Continue?",
+            "Do you want to perform another task?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        
+        if response == QMessageBox.No:
+            break
+    
+    # Clean up and exit
+    app.quit()
+    sys.exit()

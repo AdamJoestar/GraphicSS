@@ -261,14 +261,67 @@ class App:
         main_window.hide()
 
         # 2. Capture Graph Screenshot
-        graph_image = self.take_interactive_screenshot("select the **GRAPH** area")
-        
-        if graph_image:
+        while True:
+            graph_image = self.take_interactive_screenshot("select the **GRAPH** area")
+            
+            if not graph_image:
+                main_window.show()
+                return
+                
+            # Save temporary image for preview
             graph_image.save(self.graph_path)
-            print("Graph screenshot captured successfully.")
-        else:
-            main_window.show()
-            return 
+            print("Graph screenshot captured.")
+            
+            # Create preview dialog
+            preview_dialog = QDialog()
+            preview_dialog.setWindowTitle("Screenshot Preview")
+            preview_dialog.setMinimumSize(400, 400)
+            
+            # Create layout
+            layout = QVBoxLayout()
+            
+            # Add preview image
+            preview_label = QLabel()
+            pixmap = QPixmap(self.graph_path)
+            scaled_pixmap = pixmap.scaled(350, 350, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            preview_label.setPixmap(scaled_pixmap)
+            layout.addWidget(preview_label)
+            
+            # Add confirmation message
+            layout.addWidget(QLabel("Is this screenshot correct?"))
+            
+            # Add buttons
+            button_box = QVBoxLayout()
+            confirm_button = QPushButton("Yes, Continue")
+            retake_button = QPushButton("No, Retake Screenshot")
+            cancel_button = QPushButton("Cancel")
+            
+            button_box.addWidget(confirm_button)
+            button_box.addWidget(retake_button)
+            button_box.addWidget(cancel_button)
+            layout.addLayout(button_box)
+            
+            preview_dialog.setLayout(layout)
+            
+            # Connect button signals
+            confirm_button.clicked.connect(preview_dialog.accept)
+            retake_button.clicked.connect(preview_dialog.reject)
+            cancel_button.clicked.connect(lambda: preview_dialog.done(2))
+            
+            # Show dialog and get result
+            result = preview_dialog.exec_()
+            
+            if result == QDialog.Accepted:  # User confirmed screenshot
+                print("Screenshot confirmed.")
+                break
+            elif result == 2:  # User cancelled
+                if os.path.exists(self.graph_path):
+                    os.remove(self.graph_path)
+                main_window.show()
+                return
+            else:  # User wants to retake
+                print("Retaking screenshot...")
+                continue
 
         # 3. Create Word Report
         print("Starting Word document creation...")

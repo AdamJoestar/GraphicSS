@@ -134,19 +134,19 @@ class App:
         base_template_name = os.path.splitext(os.path.basename(self.input_template_path))[0]
         default_output_name = f"{base_template_name}_Output_{datetime.now().strftime('%Y%m%d')}.docx"
 
-        output_name, ok = QInputDialog.getText(
+        # Use File Save Dialog to get both the path and name
+        self.final_report_name, _ = QFileDialog.getSaveFileName(
             None,
-            "Output Name Input",
-            'Enter the desired name for the final DOCX report:',
-            QLineEdit.Normal,
-            default_output_name,
+            "Save Report As",
+            os.path.join(QDir.homePath(), default_output_name),  # Start in user's home directory
+            "Word Documents (*.docx)"
         )
 
-        if ok and output_name:
-            self.final_report_name = output_name.strip()
+        if self.final_report_name:
             if not self.final_report_name.lower().endswith(".docx"):
                 self.final_report_name += ".docx"
             
+            # Set PDF name in the same directory as the DOCX
             base_name = os.path.splitext(self.final_report_name)[0]
             self.final_pdf_name = base_name + ".pdf"
             return True
